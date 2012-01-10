@@ -5,19 +5,19 @@ Like wget, but more specific and less useful.
 A utility script for fetching and installing Tex packages from CTAN
 (Comprehensive Tex Archive Network)
 """
-from BeautifulSoup import BeautifulSoup
 import os
 import re
-import sys
 import subprocess
+import sys
+import tempfile
 import urllib
-import urllib2
 import zipfile
 
+from BeautifulSoup import BeautifulSoup
+import requests
 
-CTAN_URL = 'http://www.ctan.org/search.html#byName'
 CTAN_SITE = 'http://www.ctan.org/'
-CTAN_SEARCH_URL = CTAN_SITE + '/cgi-bin/filenameSearch.py'
+CTAN_SEARCH = CTAN_SITE + 'search'
 
 DOWNLOAD_DIR = '~/ctan_downloads/'
 DOWNLOAD_DIR = os.path.expanduser(DOWNLOAD_DIR)
@@ -28,17 +28,16 @@ LATEX_INSTALL_DIR = '/usr/share/texmf/tex/latex/'
 if len(sys.argv) <= 1:
     sys.exit("You have to supply the name of the thing you want to ctanget.")
 
-
-search_form_data = (('filename',sys.argv[1]),)
-search_form_data = (('filename','wrapfig'),)
-search_data = urllib.urlencode(search_form_data)
-
+search_form_data = (('search', sys.argv[1]),
+                    ('search_type', 'filename'))
+search_url = CTAN_SEARCH + '?' + urllib.urlencode(search_form_data)
 
 # Get the page returned by the search
-search_soup=BeautifulSoup(urllib2.urlopen(CTAN_SEARCH_URL, search_data).read())
+req = requests.get(search_url)
+search_soup = BeautifulSoup(req.content)
 
 # Get us all our links
-links = search_soup.find('pre', {'class': 'filename_search_hits'}).findAll('a')
+links = search_soup.find('table', {'class': 'pkg_info'}).findAll('a')
 
 
 for i, link in enumerate(links, start=1):
@@ -55,31 +54,48 @@ except ValueError:
 
 
 if not 0 < int(selection) <= i:
-    exit("You must pick a number between 1 and %s" %s (int(selection),))
-selected_link = links[selection-1]
+    exit("You must pick a number between 1 and %s" % (int(selection),))
+selected_link = links[selection - 1]
 
-
-if '.zip' not in selected_link.string:
+if 'pkg' in selected_link.get('href'):
     # Parse webpage for the chosen file
-    selection_soup = BeautifulSoup(urllib2.urlopen(CTAN_SITE + selected_link.get('href'),).read())
-    # Find the zip file at the end of this rainbow
-    zip_link = selection_soup.find('a',text=re.compile('\.zip$')).parent
-else:
-    zip_link = selected_link
+    pkg_url = selected_link.get('href')
+    if pkg_url.startswith('/'):
+        pkg_url = CTAN_SITE + pkg_url
 
-zip_file_name = os.path.basename(zip_link.text)
+    pkg_req = requests.get(pkg_url)
+    pkg_soup = BeautifulSoup(pkg_req.content)
+    # Find the zip file at the end of this rainbow
+    directory_url = pkg_soup.find('a', text=re.compile('CTAN directory$')).parent.get('href')
+
+    if directory_url.startswith('/'):
+        directory_url = CTAN_SITE + directory_url
+    directory_req = requests.get(directory_url)
+    directory_soup = BeautifulSoup(directory_req.content)
+    zip_link = directory_soup.find('a', text=re.compile('zip file')).parent
+
+
+zip_file_name = os.path.basename(zip_link.get('href').split('/')[-1])
 print "Downloading %s" % (zip_file_name,)
 
-
 # Download the zip file
-zip_file_path = DOWNLOAD_DIR + zip_file_name
+zip_file_dir = tempfile.mkdtemp()
+zip_file_path = os.path.join(zip_file_dir, zip_file_name)
+
 with open(zip_file_path, 'w') as f:
-    f.write(urllib2.urlopen(CTAN_SITE + zip_link.get('href')).read())
+    download_url = zip_link.get('href')
+    if download_url.startswith('/'):
+        download_url = CTAN_SITE + download_url
+    download_req = requests.get(download_url)
+    f.write(download_req.content)
+
 zip_file = zipfile.ZipFile(zip_file_path)
 
 
 # If a zipfile contains a directory with all files underneath it, use the
 # directory name
+import pdb; pdb.set_trace()
+
 if not len([zip_file.namelist()[0] in zip_test for zip_test in zip_file.namelist()[1:]]):
     zip_file_dir = zip_file.namelist()[0]
 else:
